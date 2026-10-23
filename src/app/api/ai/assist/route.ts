@@ -1,6 +1,7 @@
 // Author: yxpil
 
 import { NextResponse } from "next/server";
+import { requireApiUser } from "@/lib/auth";
 import { readJson, routeError } from "@/lib/http";
 import { AI_ACTIONS, getAiConfig, requestAiSuggestion, type AiAction } from "@/lib/ai";
 import { AppError } from "@/lib/mutations";
@@ -8,7 +9,12 @@ import { AppError } from "@/lib/mutations";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ ok: true, ...getAiConfig() });
+  try {
+    await requireApiUser();
+    return NextResponse.json({ ok: true, ...getAiConfig() });
+  } catch (error) {
+    return routeError(error);
+  }
 }
 
 function isAction(value: unknown): value is AiAction {
@@ -17,6 +23,7 @@ function isAction(value: unknown): value is AiAction {
 
 export async function POST(request: Request) {
   try {
+    await requireApiUser();
     const body = await readJson(request);
     if (!isAction(body.action)) {
       throw new AppError(400, "invalid", "未知的 AI 动作");

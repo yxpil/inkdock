@@ -1,6 +1,6 @@
 // Author: yxpil
 
-import type { ChapterStatus, StoryEntityType, WorkStatus } from "./types";
+import type { ChapterStatus, StoryEntityType, WorkRole, WorkStatus } from "./types";
 
 export const SITE_NAME = "墨坞";
 export const SITE_NAME_EN = "INKDOCK";
@@ -20,6 +20,33 @@ export const CHAPTER_STATUS_LABEL: Record<ChapterStatus, string> = {
 
 export const WORK_STATUSES: WorkStatus[] = ["serializing", "completed", "paused"];
 export const CHAPTER_STATUSES: ChapterStatus[] = ["draft", "ready", "published"];
+
+export const WORK_ROLE_LABEL: Record<WorkRole, string> = {
+  owner: "所有者",
+  editor: "编辑",
+  commenter: "评论",
+  reader: "阅读",
+};
+
+export const WORK_ROLE_HINT: Record<WorkRole, string> = {
+  owner: "全部权限，可管理成员与归档",
+  editor: "可修改作品、卷章、设定与插画",
+  commenter: "可查看与导出，评论功能待 M3",
+  reader: "只读预览，可导出整书备份",
+};
+
+export const ASSIGNABLE_WORK_ROLES: WorkRole[] = ["editor", "commenter", "reader"];
+
+export const AVATAR_COLORS = [
+  "#26594A",
+  "#A9543C",
+  "#31445C",
+  "#876A6A",
+  "#3D6B5A",
+  "#77565F",
+  "#5E615C",
+  "#9A7B45",
+] as const;
 
 export const GENRES = ["悬疑", "奇幻", "科幻", "言情", "现实", "历史", "武侠", "其他"] as const;
 

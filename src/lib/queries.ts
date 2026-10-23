@@ -1,9 +1,11 @@
 // Author: yxpil
 
-import { getDb, LOCAL_USER_ID } from "./db";
+import { getDb } from "./db";
+import { hasWorkRole } from "./permissions";
 import { dayKey, truncate } from "./utils";
 import type {
   ChapterFull,
+  ChapterIllustration,
   ChapterMeta,
   ChapterStatus,
   ContinueReading,
@@ -19,7 +21,12 @@ import type {
   User,
   VolumeSummary,
   VolumeWithChapters,
+  WorkArchive,
+  WorkArchiveChapter,
+  WorkArchiveIllustration,
   WorkDetail,
+  WorkMember,
+  WorkRole,
   WorkStatus,
   WorkSummary,
 } from "./types";
@@ -41,7 +48,7 @@ function nullableStr(row: Row, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function mapUser(row: Row): User {
+export function mapUser(row: Row): User {
   return {
     id: str(row, "id"),
     name: str(row, "name"),
@@ -81,6 +88,26 @@ function mapStoryEntity(row: Row): StoryEntity {
   };
 }
 
+function mapIllustration(row: Row): ChapterIllustration {
+  const id = str(row, "id");
+  return {
+    id,
+    chapterId: str(row, "chapter_id"),
+    paragraph: num(row, "paragraph"),
+    caption: str(row, "caption"),
+    width: num(row, "width"),
+    height: num(row, "height"),
+    imageUrl: `/api/illustrations/${id}/image`,
+    createdAt: str(row, "created_at"),
+    updatedAt: str(row, "updated_at"),
+  };
+}
+
+const ILLUSTRATION_SELECT = `
+  SELECT id, chapter_id, paragraph, caption, width, height, created_at, updated_at
+  FROM chapter_illustrations
+`;
+
 function mapWork(row: Row): WorkSummary {
   return {
     id: str(row, "id"),
@@ -101,13 +128,14 @@ function mapWork(row: Row): WorkSummary {
     lastChapterId: nullableStr(row, "last_chapter_id"),
     lastChapterTitle: nullableStr(row, "last_chapter_title"),
     lastChapterVolumeId: nullableStr(row, "last_chapter_volume_id"),
+    role: str(row, "role") as WorkRole,
   };
 }
 
 const WORK_SELECT = `
   SELECT w.id, w.title, w.subtitle, w.description, w.genre, w.status, w.cover_color,
          w.cover_image, w.target_words, w.created_at, w.updated_at,
-         u.name AS author_name,
+         u.name AS author_name, m.role AS role,
          (SELECT COALESCE(SUM(c.word_count), 0) FROM chapters c
            WHERE c.work_id = w.id AND c.deleted_at IS NULL) AS total_words,
          (SELECT COUNT(*) FROM chapters c
@@ -124,39 +152,80 @@ const WORK_SELECT = `
            ORDER BY c.updated_at DESC, c.sort DESC LIMIT 1) AS last_chapter_volume_id
   FROM works w
   JOIN users u ON u.id = w.author_id
+  JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
 `;
 
-export function getUser(): User {
+export function getUserById(userId: string): User | null {
   const db = getDb();
-  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(LOCAL_USER_ID) as
+  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as
     | Row
     | undefined;
-  if (!row) {
-    throw new Error("Local user is missing");
-  }
-  return mapUser(row);
+  return row ? mapUser(row) : null;
 }
 
-export function listWorks(): WorkSummary[] {
+export function getUserByHandle(handle: string): User | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT * FROM users WHERE handle = ?")
+    .get(handle.trim().toLowerCase()) as Row | undefined;
+  return row ? mapUser(row) : null;
+}
+
+export function countRegisteredUsers(): number {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT COUNT(*) AS n FROM users WHERE password_hash <> ''")
+    .get() as { n: number };
+  return Number(row.n);
+}
+
+export function listWorks(userId: string): WorkSummary[] {
   const db = getDb();
   const rows = db
     .prepare(`${WORK_SELECT} WHERE w.deleted_at IS NULL ORDER BY w.updated_at DESC`)
-    .all() as Row[];
+    .all(userId) as Row[];
   return rows.map(mapWork);
 }
 
-function getWorkSummaryById(id: string): WorkSummary | null {
+function getWorkSummaryById(id: string, userId: string): WorkSummary | null {
   const db = getDb();
   const row = db
     .prepare(`${WORK_SELECT} WHERE w.id = ? AND w.deleted_at IS NULL`)
-    .get(id) as Row | undefined;
+    .get(userId, id) as Row | undefined;
   return row ? mapWork(row) : null;
 }
 
-export function getWorkDetail(id: string): WorkDetail | null {
+export function listWorkMembers(workId: string): WorkMember[] {
   const db = getDb();
-  const summary = getWorkSummaryById(id);
+  const rows = db
+    .prepare(
+      `SELECT u.*, m.role AS role, m.created_at AS joined_at
+       FROM work_members m JOIN users u ON u.id = m.user_id
+       WHERE m.work_id = ?
+       ORDER BY CASE m.role
+         WHEN 'owner' THEN 0 WHEN 'editor' THEN 1
+         WHEN 'commenter' THEN 2 ELSE 3 END,
+         m.created_at ASC`,
+    )
+    .all(workId) as Row[];
+  return rows.map((row) => ({
+    user: mapUser(row),
+    role: str(row, "role") as WorkRole,
+    joinedAt: str(row, "joined_at"),
+  }));
+}
+
+export function getWorkDetail(id: string, userId: string): WorkDetail | null {
+  const db = getDb();
+  const summary = getWorkSummaryById(id, userId);
   if (!summary) return null;
+
+  const authorRow = db
+    .prepare(
+      `SELECT u.* FROM users u JOIN works w ON w.author_id = u.id WHERE w.id = ?`,
+    )
+    .get(id) as Row | undefined;
+  if (!authorRow) return null;
 
   const volumeRows = db
     .prepare("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort ASC, created_at ASC")
@@ -186,46 +255,53 @@ export function getWorkDetail(id: string): WorkDetail | null {
 
   return {
     ...summary,
-    author: getUser(),
+    author: mapUser(authorRow),
     volumes,
+    members: listWorkMembers(id),
   };
 }
 
-export function getDailyWords(): number {
+export function getDailyWords(userId: string): number {
   const db = getDb();
   const row = db
     .prepare("SELECT words FROM daily_stats WHERE day = ? AND user_id = ?")
-    .get(dayKey(), LOCAL_USER_ID) as { words: number } | undefined;
+    .get(dayKey(), userId) as { words: number } | undefined;
   return row?.words ?? 0;
 }
 
-export function getLibraryData(): LibraryData {
+export function getLibraryData(user: User): LibraryData {
   const db = getDb();
-  const user = getUser();
-  const works = listWorks();
+  const works = listWorks(user.id);
 
   const totalWordsRow = db
     .prepare(
       `SELECT COALESCE(SUM(c.word_count), 0) AS total
-       FROM chapters c JOIN works w ON w.id = c.work_id
+       FROM chapters c
+       JOIN works w ON w.id = c.work_id
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
        WHERE c.deleted_at IS NULL AND w.deleted_at IS NULL`,
     )
-    .get() as { total: number };
+    .get(user.id) as { total: number };
   const chapterCountRow = db
     .prepare(
       `SELECT COUNT(*) AS n
-       FROM chapters c JOIN works w ON w.id = c.work_id
+       FROM chapters c
+       JOIN works w ON w.id = c.work_id
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
        WHERE c.deleted_at IS NULL AND w.deleted_at IS NULL`,
     )
-    .get() as { n: number };
+    .get(user.id) as { n: number };
   const activeRow = db
     .prepare(
-      "SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND status = 'serializing'",
+      `SELECT COUNT(*) AS n
+       FROM works w
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
+       WHERE w.deleted_at IS NULL AND w.status = 'serializing'`,
     )
-    .get() as { n: number };
+    .get(user.id) as { n: number };
 
   const stats: LibraryStats = {
-    todayWords: getDailyWords(),
+    todayWords: getDailyWords(user.id),
     totalWords: Number(totalWordsRow.total ?? 0),
     activeWorks: Number(activeRow.n ?? 0),
     chapterCount: Number(chapterCountRow.n ?? 0),
@@ -238,10 +314,11 @@ export function getLibraryData(): LibraryData {
        FROM chapters c
        JOIN works w ON w.id = c.work_id
        JOIN volumes v ON v.id = c.volume_id
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
        WHERE c.deleted_at IS NULL AND w.deleted_at IS NULL
        ORDER BY c.updated_at DESC LIMIT 1`,
     )
-    .get() as Row | undefined;
+    .get(user.id) as Row | undefined;
 
   const recent: ContinueReading | null = recentRow
     ? {
@@ -258,16 +335,19 @@ export function getLibraryData(): LibraryData {
   return { user, works, stats, recent };
 }
 
-export function getEditorBundle(chapterId: string): EditorBundle | null {
+export function getEditorBundle(chapterId: string, userId: string): EditorBundle | null {
   const db = getDb();
   const row = db
     .prepare(
-      `SELECT c.*, w.author_id
-       FROM chapters c JOIN works w ON w.id = c.work_id
+      `SELECT c.*, w.author_id, m.role AS member_role
+       FROM chapters c
+       JOIN works w ON w.id = c.work_id
+       JOIN work_members m ON m.work_id = c.work_id AND m.user_id = ?
        WHERE c.id = ? AND c.deleted_at IS NULL AND w.deleted_at IS NULL`,
     )
-    .get(chapterId) as Row | undefined;
+    .get(userId, chapterId) as Row | undefined;
   if (!row) return null;
+  if (!hasWorkRole(str(row, "member_role") as WorkRole, "editor")) return null;
 
   const workId = str(row, "work_id");
   const workRow = db
@@ -310,7 +390,7 @@ export function getEditorBundle(chapterId: string): EditorBundle | null {
   };
 
   return {
-    user: getUser(),
+    user: getUserById(userId) as User,
     work,
     volumes: volumes.map(
       (volume): VolumeSummary => ({
@@ -326,9 +406,65 @@ export function getEditorBundle(chapterId: string): EditorBundle | null {
       ...mapChapter(row),
       content: str(row, "content"),
     } satisfies ChapterFull,
-    dailyWords: getDailyWords(),
+    dailyWords: getDailyWords(userId),
     storyEntities: listStoryEntities(workId),
+    illustrations: listChapterIllustrations(str(row, "id")),
   };
+}
+
+export function listChapterIllustrations(chapterId: string): ChapterIllustration[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `${ILLUSTRATION_SELECT}
+       WHERE chapter_id = ?
+       ORDER BY paragraph ASC, created_at ASC`,
+    )
+    .all(chapterId) as Row[];
+  return rows.map(mapIllustration);
+}
+
+export function getIllustration(
+  illustrationId: string,
+  userId: string,
+): ChapterIllustration | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `${ILLUSTRATION_SELECT}
+       WHERE i.id = ?
+         AND EXISTS (
+           SELECT 1 FROM chapters c
+           JOIN works w ON w.id = c.work_id
+           JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
+           WHERE c.id = i.chapter_id AND c.deleted_at IS NULL AND w.deleted_at IS NULL
+         )`,
+    )
+    .get(illustrationId, userId) as Row | undefined;
+  return row ? mapIllustration(row) : null;
+}
+
+export function getIllustrationImage(
+  illustrationId: string,
+  userId: string,
+): { mime: string; data: Uint8Array<ArrayBuffer> } | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT i.image_mime, i.image_data
+       FROM chapter_illustrations i
+       JOIN chapters c ON c.id = i.chapter_id
+       JOIN works w ON w.id = c.work_id
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
+       WHERE i.id = ? AND c.deleted_at IS NULL AND w.deleted_at IS NULL`,
+    )
+    .get(userId, illustrationId) as
+    | { image_mime: string; image_data: Uint8Array }
+    | undefined;
+  if (!row) return null;
+  const data = new Uint8Array(row.image_data.byteLength);
+  data.set(row.image_data);
+  return { mime: `image/${row.image_mime}`, data };
 }
 
 export function listStoryEntities(workId: string): StoryEntity[] {
@@ -343,25 +479,32 @@ export function listStoryEntities(workId: string): StoryEntity[] {
   return rows.map(mapStoryEntity);
 }
 
-export function getStoryEntity(entityId: string): StoryEntity | null {
+export function getStoryEntity(entityId: string, userId: string): StoryEntity | null {
   const db = getDb();
   const row = db
-    .prepare("SELECT * FROM story_entities WHERE id = ?")
-    .get(entityId) as Row | undefined;
+    .prepare(
+      `SELECT e.* FROM story_entities e
+       JOIN works w ON w.id = e.work_id
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
+       WHERE e.id = ? AND w.deleted_at IS NULL`,
+    )
+    .get(userId, entityId) as Row | undefined;
   return row ? mapStoryEntity(row) : null;
 }
 
-export function getReaderWork(workId: string): ReaderWork | null {
+export function getReaderWork(workId: string, userId: string): ReaderWork | null {
   const db = getDb();
   const workRow = db
     .prepare(
       `SELECT w.*, u.name AS author_name,
         (SELECT COALESCE(SUM(c.word_count), 0) FROM chapters c
           WHERE c.work_id = w.id AND c.deleted_at IS NULL) AS total_words
-       FROM works w JOIN users u ON u.id = w.author_id
+       FROM works w
+       JOIN users u ON u.id = w.author_id
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
        WHERE w.id = ? AND w.deleted_at IS NULL`,
     )
-    .get(workId) as Row | undefined;
+    .get(userId, workId) as Row | undefined;
   if (!workRow) return null;
 
   const chapterRows = db
@@ -373,6 +516,24 @@ export function getReaderWork(workId: string): ReaderWork | null {
     )
     .all(workId) as Row[];
 
+  const illustrationRows = db
+    .prepare(
+      `SELECT i.id, i.chapter_id, i.paragraph, i.caption, i.width, i.height,
+              i.created_at, i.updated_at
+       FROM chapter_illustrations i
+       JOIN chapters c ON c.id = i.chapter_id
+       WHERE c.work_id = ? AND c.deleted_at IS NULL
+       ORDER BY i.paragraph ASC, i.created_at ASC`,
+    )
+    .all(workId) as Row[];
+  const illustrationsByChapter = new Map<string, ChapterIllustration[]>();
+  for (const row of illustrationRows) {
+    const chapterId = str(row, "chapter_id");
+    const list = illustrationsByChapter.get(chapterId) ?? [];
+    list.push(mapIllustration(row));
+    illustrationsByChapter.set(chapterId, list);
+  }
+
   const chapters: ReaderChapter[] = chapterRows.map((row) => ({
     id: str(row, "id"),
     workId: str(row, "work_id"),
@@ -382,6 +543,7 @@ export function getReaderWork(workId: string): ReaderWork | null {
     wordCount: num(row, "word_count"),
     sort: num(row, "sort"),
     volumeTitle: str(row, "volume_title"),
+    illustrations: illustrationsByChapter.get(str(row, "id")) ?? [],
   }));
 
   return {
@@ -396,15 +558,24 @@ export function getReaderWork(workId: string): ReaderWork | null {
   };
 }
 
-export function listRevisions(chapterId: string, limit = 30): RevisionMeta[] {
+export function listRevisions(
+  chapterId: string,
+  userId: string,
+  limit = 30,
+): RevisionMeta[] {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT id, chapter_id, word_count, reason, created_at, content
-       FROM revisions WHERE chapter_id = ?
-       ORDER BY created_at DESC LIMIT ?`,
+      `SELECT r.id, r.chapter_id, r.word_count, r.reason, r.created_at, r.content
+       FROM revisions r
+       JOIN chapters c ON c.id = r.chapter_id
+       JOIN works w ON w.id = c.work_id
+       JOIN work_members m ON m.work_id = w.id AND m.user_id = ?
+       WHERE r.chapter_id = ? AND c.deleted_at IS NULL AND w.deleted_at IS NULL
+         AND m.role IN ('owner', 'editor')
+       ORDER BY r.created_at DESC LIMIT ?`,
     )
-    .all(chapterId, limit) as Row[];
+    .all(userId, chapterId, limit) as Row[];
   return rows.map((row) => ({
     id: str(row, "id"),
     chapterId: str(row, "chapter_id"),
@@ -443,8 +614,11 @@ export interface WorkExport {
   volumes: ExportVolume[];
 }
 
-export function getWorkForExport(workId: string): WorkExport | null {
-  const detail = getWorkDetail(workId);
+export function getWorkForExport(
+  workId: string,
+  userId: string,
+): WorkExport | null {
+  const detail = getWorkDetail(workId, userId);
   if (!detail) return null;
 
   const db = getDb();
@@ -478,6 +652,90 @@ export function getWorkForExport(workId: string): WorkExport | null {
     volumes: detail.volumes.map((volume) => ({
       title: volume.title,
       chapters: byVolume.get(volume.id) ?? [],
+    })),
+  };
+}
+
+export function getWorkArchive(workId: string, userId: string): WorkArchive | null {
+  const detail = getWorkDetail(workId, userId);
+  if (!detail) return null;
+
+  const db = getDb();
+  const chapterRows = db
+    .prepare(
+      `SELECT c.id, c.volume_id, c.title, c.status, c.content
+       FROM chapters c JOIN volumes v ON v.id = c.volume_id
+       WHERE c.work_id = ? AND c.deleted_at IS NULL
+       ORDER BY v.sort ASC, c.sort ASC`,
+    )
+    .all(workId) as Row[];
+
+  const illustrationRows = db
+    .prepare(
+      `SELECT i.chapter_id, i.paragraph, i.caption, i.image_mime, i.image_data,
+              i.width, i.height
+       FROM chapter_illustrations i
+       JOIN chapters c ON c.id = i.chapter_id
+       WHERE c.work_id = ? AND c.deleted_at IS NULL
+       ORDER BY i.paragraph ASC, i.created_at ASC`,
+    )
+    .all(workId) as Row[];
+
+  const illustrationsByChapter = new Map<string, WorkArchiveIllustration[]>();
+  for (const row of illustrationRows) {
+    const chapterId = str(row, "chapter_id");
+    const list = illustrationsByChapter.get(chapterId) ?? [];
+    list.push({
+      paragraph: num(row, "paragraph"),
+      caption: str(row, "caption"),
+      mime: str(row, "image_mime") as WorkArchiveIllustration["mime"],
+      width: num(row, "width"),
+      height: num(row, "height"),
+      data: Buffer.from(row.image_data as Uint8Array).toString("base64"),
+    });
+    illustrationsByChapter.set(chapterId, list);
+  }
+
+  const chaptersByVolume = new Map<string, WorkArchiveChapter[]>();
+  for (const row of chapterRows) {
+    const volumeId = str(row, "volume_id");
+    const list = chaptersByVolume.get(volumeId) ?? [];
+    list.push({
+      title: str(row, "title"),
+      status: str(row, "status") as ChapterStatus,
+      content: str(row, "content"),
+      illustrations: illustrationsByChapter.get(str(row, "id")) ?? [],
+    });
+    chaptersByVolume.set(volumeId, list);
+  }
+
+  return {
+    app: "inkdock",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    work: {
+      title: detail.title,
+      subtitle: detail.subtitle,
+      description: detail.description,
+      genre: detail.genre,
+      status: detail.status,
+      coverColor: detail.coverColor,
+      coverImage: detail.coverImage,
+      targetWords: detail.targetWords,
+      authorName: detail.authorName,
+    },
+    storyEntities: listStoryEntities(workId).map((entity) => ({
+      type: entity.type,
+      name: entity.name,
+      subtitle: entity.subtitle,
+      summary: entity.summary,
+      description: entity.description,
+      color: entity.color,
+    })),
+    volumes: detail.volumes.map((volume) => ({
+      title: volume.title,
+      summary: volume.summary,
+      chapters: chaptersByVolume.get(volume.id) ?? [],
     })),
   };
 }

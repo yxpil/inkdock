@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { StudioShell } from "@/components/studio-shell";
 import { LibraryView } from "@/components/library/library-view";
+import { requireUser } from "@/lib/auth";
 import { getLibraryData } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -14,11 +15,12 @@ export default async function LibraryPage({
 }: {
   searchParams: Promise<{ new?: string }>;
 }) {
-  const data = getLibraryData();
+  const user = await requireUser();
+  const data = getLibraryData(user);
   const params = await searchParams;
 
   return (
-    <StudioShell user={data.user}>
+    <StudioShell user={user}>
       <LibraryView data={data} openNewInitially={params.new === "1"} />
     </StudioShell>
   );

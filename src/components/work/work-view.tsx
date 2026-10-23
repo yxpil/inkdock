@@ -9,7 +9,9 @@ import {
   ArrowLeft,
   BookOpen,
   Download,
+  FileJson,
   FileText,
+  Globe,
   Layers,
   Loader2,
   Pencil,
@@ -17,21 +19,36 @@ import {
   Plus,
   Smartphone,
   Trash2,
+  UserPlus,
+  Users,
 } from "lucide-react";
-import type { ChapterMeta, VolumeWithChapters, WorkDetail } from "@/lib/types";
+import type {
+  ChapterMeta,
+  VolumeWithChapters,
+  WorkDetail,
+  WorkMember,
+  WorkRole,
+} from "@/lib/types";
 import { BookCover } from "@/components/book-cover";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EditWorkDialog, VolumeDialog } from "@/components/work/work-dialogs";
 import { capsule } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/api-client";
-import { CHAPTER_STATUS_LABEL, WORK_STATUS_LABEL } from "@/lib/constants";
+import {
+  ASSIGNABLE_WORK_ROLES,
+  CHAPTER_STATUS_LABEL,
+  WORK_ROLE_HINT,
+  WORK_ROLE_LABEL,
+  WORK_STATUS_LABEL,
+} from "@/lib/constants";
 import {
   cn,
   formatDateTime,
   formatNumber,
   formatRelative,
   formatWords,
+  initialOf,
 } from "@/lib/utils";
 
 function chapterDot(status: ChapterMeta["status"]): string {
@@ -61,6 +78,15 @@ export function WorkView({ work }: { work: WorkDetail }) {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete>(null);
   const [deleting, setDeleting] = useState(false);
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
+  const [memberHandle, setMemberHandle] = useState("");
+  const [memberRole, setMemberRole] = useState<WorkRole>("editor");
+  const [addingMember, setAddingMember] = useState(false);
+  const [updatingMember, setUpdatingMember] = useState<string | null>(null);
+  const [pendingMember, setPendingMember] = useState<WorkMember | null>(null);
+  const [removingMember, setRemovingMember] = useState(false);
+
+  const canEdit = work.role === "owner" || work.role === "editor";
+  const canManage = work.role === "owner";
 
   const allChapters = useMemo(
     () => work.volumes.flatMap((volume) => volume.chapters),
@@ -110,6 +136,58 @@ export function WorkView({ work }: { work: WorkDetail }) {
     }
   };
 
+  const addMember = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!memberHandle.trim() || addingMember) return;
+    setAddingMember(true);
+    try {
+      await apiFetch(`/api/works/${work.id}/members`, {
+        method: "POST",
+        body: JSON.stringify({ handle: memberHandle.trim(), role: memberRole }),
+      });
+      setMemberHandle("");
+      toast("已加入协作成员");
+      router.refresh();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "添加成员失败", "danger");
+    } finally {
+      setAddingMember(false);
+    }
+  };
+
+  const changeMemberRole = async (member: WorkMember, role: WorkRole) => {
+    setUpdatingMember(member.user.id);
+    try {
+      await apiFetch(`/api/works/${work.id}/members/${member.user.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      });
+      toast(`已将 ${member.user.name} 设为${WORK_ROLE_LABEL[role]}`);
+      router.refresh();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "调整角色失败", "danger");
+    } finally {
+      setUpdatingMember(null);
+    }
+  };
+
+  const confirmRemoveMember = async () => {
+    if (!pendingMember) return;
+    setRemovingMember(true);
+    try {
+      await apiFetch(`/api/works/${work.id}/members/${pendingMember.user.id}`, {
+        method: "DELETE",
+      });
+      toast("已移除协作成员");
+      setPendingMember(null);
+      router.refresh();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "移除成员失败", "danger");
+    } finally {
+      setRemovingMember(false);
+    }
+  };
+
   return (
     <div>
       <Link
@@ -137,6 +215,9 @@ export function WorkView({ work }: { work: WorkDetail }) {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="chip chip-accent">{WORK_STATUS_LABEL[work.status]}</span>
                 <span className="chip">{work.genre}</span>
+                {work.role !== "owner" ? (
+                  <span className="chip">协作 · {WORK_ROLE_LABEL[work.role]}</span>
+                ) : null}
                 <span className="text-[11px] text-ink-mute">{work.authorName}</span>
               </div>
               <h1 className="mt-3 font-serif text-[26px] font-semibold leading-tight tracking-[-0.01em] sm:text-[34px]">
@@ -163,38 +244,52 @@ export function WorkView({ work }: { work: WorkDetail }) {
               </div>
 
               <div className="mt-5 flex flex-wrap gap-2">
-                {entryChapterId ? (
-                  <Link
-                    href={`/write/${entryChapterId}`}
-                    className={capsule("primary", "lg")}
-                  >
-                    <PenLine size={16} />
-                    {work.lastChapterId ? "继续写作" : "开始写作"}
-                  </Link>
-                ) : (
-                  <button type="button" className={capsule("primary", "lg")} disabled>
-                    <PenLine size={16} />
-                    暂无章节
-                  </button>
-                )}
+                {canEdit ? (
+                  entryChapterId ? (
+                    <Link
+                      href={`/write/${entryChapterId}`}
+                      className={capsule("primary", "lg")}
+                    >
+                      <PenLine size={16} />
+                      {work.lastChapterId ? "继续写作" : "开始写作"}
+                    </Link>
+                  ) : (
+                    <button type="button" className={capsule("primary", "lg")} disabled>
+                      <PenLine size={16} />
+                      暂无章节
+                    </button>
+                  )
+                ) : null}
                 {entryChapterId ? (
                   <Link
                     href={`/preview/${work.id}?chapter=${entryChapterId}`}
-                    className={capsule("outline", "lg")}
+                    className={capsule(canEdit ? "outline" : "primary", "lg")}
                   >
                     <Smartphone size={16} />
-                    手机预览
+                    {canEdit ? "手机预览" : "阅读预览"}
                   </Link>
+                ) : !canEdit ? (
+                  <button type="button" className={capsule("primary", "lg")} disabled>
+                    <Smartphone size={16} />
+                    暂无章节
+                  </button>
                 ) : null}
-                <button
-                  type="button"
-                  className={capsule("ghost", "lg")}
-                  onClick={() => setEditOpen(true)}
-                >
-                  <Pencil size={15} />
-                  编辑资料
-                </button>
+                {canEdit ? (
+                  <button
+                    type="button"
+                    className={capsule("ghost", "lg")}
+                    onClick={() => setEditOpen(true)}
+                  >
+                    <Pencil size={15} />
+                    编辑资料
+                  </button>
+                ) : null}
               </div>
+              {!canEdit ? (
+                <p className="mt-3 text-[10px] leading-5 text-ink-mute">
+                  你以{WORK_ROLE_LABEL[work.role]}身份查看。写作、卷章与设定编辑仅对所有者与编辑开放。
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -209,14 +304,16 @@ export function WorkView({ work }: { work: WorkDetail }) {
                 {work.volumeCount} 卷 · {work.chapterCount} 章 · {formatWords(work.totalWords)} 字
               </p>
             </div>
-            <button
-              type="button"
-              className={capsule("secondary", "md")}
-              onClick={() => setVolumeDialog({ mode: "create" })}
-            >
-              <Plus size={15} />
-              新建卷
-            </button>
+            {canEdit ? (
+              <button
+                type="button"
+                className={capsule("secondary", "md")}
+                onClick={() => setVolumeDialog({ mode: "create" })}
+              >
+                <Plus size={15} />
+                新建卷
+              </button>
+            ) : null}
           </div>
 
           <div className="mt-4 space-y-4">
@@ -230,47 +327,49 @@ export function WorkView({ work }: { work: WorkDetail }) {
                       {volume.summary ? ` · ${volume.summary}` : ""}
                     </p>
                   </div>
-                  <div className="flex flex-none items-center gap-1">
-                    <button
-                      type="button"
-                      className={capsule("secondary", "sm")}
-                      onClick={() => addChapter(volume.id)}
-                      disabled={creatingIn === volume.id}
-                      aria-label={`在 ${volume.title} 中新增章节`}
-                    >
-                      {creatingIn === volume.id ? (
-                        <Loader2 size={13} className="animate-spin-slow" />
-                      ) : (
-                        <Plus size={13} />
-                      )}
-                      添加
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-capsule h-8 w-8"
-                      onClick={() => setVolumeDialog({ mode: "edit", volume })}
-                      aria-label={`编辑 ${volume.title}`}
-                      title="编辑卷"
-                    >
-                      <Pencil size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-capsule h-8 w-8 hover:bg-danger-soft hover:text-danger"
-                      onClick={() => setPendingDelete({ kind: "volume", volume })}
-                      disabled={volume.chapters.length > 0 || work.volumes.length <= 1}
-                      aria-label={`删除 ${volume.title}`}
-                      title={
-                        volume.chapters.length > 0
-                          ? "卷内仍有章节，无法删除"
-                          : work.volumes.length <= 1
-                            ? "作品至少保留一卷"
-                            : "删除空卷"
-                      }
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                  {canEdit ? (
+                    <div className="flex flex-none items-center gap-1">
+                      <button
+                        type="button"
+                        className={capsule("secondary", "sm")}
+                        onClick={() => addChapter(volume.id)}
+                        disabled={creatingIn === volume.id}
+                        aria-label={`在 ${volume.title} 中新增章节`}
+                      >
+                        {creatingIn === volume.id ? (
+                          <Loader2 size={13} className="animate-spin-slow" />
+                        ) : (
+                          <Plus size={13} />
+                        )}
+                        添加
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-capsule h-8 w-8"
+                        onClick={() => setVolumeDialog({ mode: "edit", volume })}
+                        aria-label={`编辑 ${volume.title}`}
+                        title="编辑卷"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-capsule h-8 w-8 hover:bg-danger-soft hover:text-danger"
+                        onClick={() => setPendingDelete({ kind: "volume", volume })}
+                        disabled={volume.chapters.length > 0 || work.volumes.length <= 1}
+                        aria-label={`删除 ${volume.title}`}
+                        title={
+                          volume.chapters.length > 0
+                            ? "卷内仍有章节，无法删除"
+                            : work.volumes.length <= 1
+                              ? "作品至少保留一卷"
+                              : "删除空卷"
+                        }
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ) : null}
                 </header>
 
                 {volume.chapters.length === 0 ? (
@@ -279,14 +378,16 @@ export function WorkView({ work }: { work: WorkDetail }) {
                       <FeatherIcon />
                     </span>
                     <p className="mt-3 text-[13px] text-ink-soft">这一卷还没有章节。</p>
-                    <button
-                      type="button"
-                      className={capsule("ghost", "sm", "mt-2")}
-                      onClick={() => addChapter(volume.id)}
-                    >
-                      <Plus size={13} />
-                      写下第一章
-                    </button>
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        className={capsule("ghost", "sm", "mt-2")}
+                        onClick={() => addChapter(volume.id)}
+                      >
+                        <Plus size={13} />
+                        写下第一章
+                      </button>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="p-2 sm:p-3">
@@ -296,7 +397,11 @@ export function WorkView({ work }: { work: WorkDetail }) {
                         className="group flex items-center gap-1 rounded-2xl pr-1 transition-colors hover:bg-surface-2"
                       >
                         <Link
-                          href={`/write/${chapter.id}`}
+                          href={
+                            canEdit
+                              ? `/write/${chapter.id}`
+                              : `/preview/${work.id}?chapter=${chapter.id}`
+                          }
                           className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2.5 sm:gap-3"
                         >
                           <span className="w-6 flex-none text-center font-mono text-[10px] text-ink-mute">
@@ -323,15 +428,17 @@ export function WorkView({ work }: { work: WorkDetail }) {
                             {formatRelative(chapter.updatedAt)}
                           </span>
                         </Link>
-                        <button
-                          type="button"
-                          onClick={() => setPendingDelete({ kind: "chapter", chapter })}
-                          className="flex h-8 w-8 flex-none items-center justify-center rounded-full text-ink-mute opacity-100 transition-colors hover:bg-danger-soft hover:text-danger sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
-                          aria-label={`删除章节 ${chapter.title}`}
-                          title="删除章节"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => setPendingDelete({ kind: "chapter", chapter })}
+                            className="flex h-8 w-8 flex-none items-center justify-center rounded-full text-ink-mute opacity-100 transition-colors hover:bg-danger-soft hover:text-danger sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                            aria-label={`删除章节 ${chapter.title}`}
+                            title="删除章节"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -345,14 +452,16 @@ export function WorkView({ work }: { work: WorkDetail }) {
           <section className="card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">作品资料</h2>
-              <button
-                type="button"
-                className="icon-capsule h-8 w-8"
-                onClick={() => setEditOpen(true)}
-                aria-label="编辑作品资料"
-              >
-                <Pencil size={14} />
-              </button>
+              {canEdit ? (
+                <button
+                  type="button"
+                  className="icon-capsule h-8 w-8"
+                  onClick={() => setEditOpen(true)}
+                  aria-label="编辑作品资料"
+                >
+                  <Pencil size={14} />
+                </button>
+              ) : null}
             </div>
             <dl className="mt-4 space-y-3 text-[12px]">
               <InfoRow label="题材" value={work.genre} />
@@ -382,9 +491,131 @@ export function WorkView({ work }: { work: WorkDetail }) {
           </section>
 
           <section className="card p-5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                <Users size={15} className="text-ink-mute" />
+                协作成员
+              </h2>
+              <span className="text-[10px] tabular-nums text-ink-mute">
+                {work.members.length} 人
+              </span>
+            </div>
+            <ul className="mt-4 space-y-3">
+              {work.members.map((member) => {
+                const isAuthor = member.user.id === work.author.id;
+                const busy = updatingMember === member.user.id;
+                return (
+                  <li key={member.user.id} className="flex items-center gap-2.5">
+                    <span
+                      className="flex h-9 w-9 flex-none items-center justify-center rounded-full text-[12px] font-semibold text-on-cover"
+                      style={{ backgroundColor: member.user.avatarColor }}
+                    >
+                      {initialOf(member.user.name)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-medium">{member.user.name}</p>
+                      <p className="truncate text-[10px] text-ink-mute">@{member.user.handle}</p>
+                    </div>
+                    {isAuthor ? (
+                      <span className="chip chip-accent flex-none">所有者</span>
+                    ) : canManage ? (
+                      <div className="flex flex-none items-center gap-1">
+                        <select
+                          className="h-8 rounded-full border border-line bg-surface px-2 text-[11px] text-ink-soft"
+                          value={member.role}
+                          onChange={(event) =>
+                            changeMemberRole(member, event.target.value as WorkRole)
+                          }
+                          disabled={busy}
+                          aria-label={`调整 ${member.user.name} 的角色`}
+                        >
+                          {ASSIGNABLE_WORK_ROLES.map((role) => (
+                            <option key={role} value={role}>
+                              {WORK_ROLE_LABEL[role]}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 items-center justify-center rounded-full text-ink-mute transition-colors hover:bg-danger-soft hover:text-danger"
+                          onClick={() => setPendingMember(member)}
+                          disabled={busy}
+                          aria-label={`移除成员 ${member.user.name}`}
+                          title="移除成员"
+                        >
+                          {busy ? (
+                            <Loader2 size={13} className="animate-spin-slow" />
+                          ) : (
+                            <Trash2 size={13} />
+                          )}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="chip flex-none">{WORK_ROLE_LABEL[member.role]}</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+
+            {canManage ? (
+              <form onSubmit={addMember} className="mt-4 border-t border-line pt-4">
+                <label className="field-label" htmlFor="member-handle">
+                  按账号邀请
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="member-handle"
+                    className="field-input h-10 min-w-0 flex-1"
+                    value={memberHandle}
+                    onChange={(event) => setMemberHandle(event.target.value)}
+                    placeholder="@handle"
+                    maxLength={25}
+                    autoComplete="off"
+                  />
+                  <select
+                    className="h-10 flex-none rounded-full border border-line bg-surface px-2.5 text-[12px] text-ink-soft"
+                    value={memberRole}
+                    onChange={(event) => setMemberRole(event.target.value as WorkRole)}
+                    aria-label="成员角色"
+                  >
+                    {ASSIGNABLE_WORK_ROLES.map((role) => (
+                      <option key={role} value={role}>
+                        {WORK_ROLE_LABEL[role]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="mt-2 text-[10px] leading-5 text-ink-mute">
+                  {WORK_ROLE_HINT[memberRole]}
+                </p>
+                <button
+                  type="submit"
+                  className={capsule("secondary", "sm", "mt-2.5 w-full")}
+                  disabled={addingMember || !memberHandle.trim()}
+                >
+                  {addingMember ? (
+                    <Loader2 size={13} className="animate-spin-slow" />
+                  ) : (
+                    <UserPlus size={13} />
+                  )}
+                  添加成员
+                </button>
+                <p className="mt-2 text-[10px] leading-5 text-ink-mute">
+                  对方需先在本机注册账号，密码无法代为设置。
+                </p>
+              </form>
+            ) : (
+              <p className="mt-4 border-t border-line pt-4 text-[10px] leading-5 text-ink-mute">
+                只有作品所有者可以邀请或调整成员。
+              </p>
+            )}
+          </section>
+
+          <section className="card p-5">
             <h2 className="text-sm font-semibold">导出</h2>
             <p className="mt-1 text-[11px] leading-5 text-ink-mute">
-              导出全部未删除章节，可直接交给平台或备份。
+              网页导出可直接打开或分享；JSON 备份保留书封、设定与插画，可重新导入。
             </p>
             <div className="mt-4 space-y-2">
               <a
@@ -415,6 +646,38 @@ export function WorkView({ work }: { work: WorkDetail }) {
                   Markdown
                   <span className="mt-0.5 block text-[10px] font-normal text-ink-mute">
                     便于版本管理与排版
+                  </span>
+                </span>
+                <Download size={14} className="text-ink-mute" />
+              </a>
+              <a
+                href={`/api/works/${work.id}/export?format=html`}
+                download
+                className="flex items-center gap-3 rounded-2xl bg-surface-2 px-3.5 py-3 text-[12px] font-medium transition-colors hover:bg-surface-3"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-ink-soft">
+                  <Globe size={15} />
+                </span>
+                <span className="flex-1">
+                  网页 HTML
+                  <span className="mt-0.5 block text-[10px] font-normal text-ink-mute">
+                    单文件，含封面与插画
+                  </span>
+                </span>
+                <Download size={14} className="text-ink-mute" />
+              </a>
+              <a
+                href={`/api/works/${work.id}/export?format=json`}
+                download
+                className="flex items-center gap-3 rounded-2xl bg-surface-2 px-3.5 py-3 text-[12px] font-medium transition-colors hover:bg-surface-3"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-ink-soft">
+                  <FileJson size={15} />
+                </span>
+                <span className="flex-1">
+                  整书备份 JSON
+                  <span className="mt-0.5 block text-[10px] font-normal text-ink-mute">
+                    含封面、设定与插画，可再导入
                   </span>
                 </span>
                 <Download size={14} className="text-ink-mute" />
@@ -458,6 +721,20 @@ export function WorkView({ work }: { work: WorkDetail }) {
               : ""
         }
         confirmLabel="确认删除"
+      />
+
+      <ConfirmDialog
+        open={pendingMember !== null}
+        onClose={() => setPendingMember(null)}
+        onConfirm={confirmRemoveMember}
+        pending={removingMember}
+        title="移除协作成员？"
+        description={
+          pendingMember
+            ? `@${pendingMember.user.handle} 将立即失去《${work.title}》的访问权限。`
+            : ""
+        }
+        confirmLabel="确认移除"
       />
     </div>
   );

@@ -1,6 +1,7 @@
 // Author: yxpil
 
 import { NextResponse } from "next/server";
+import { requireApiUser } from "@/lib/auth";
 import { readJson, routeError } from "@/lib/http";
 import { updateUser } from "@/lib/mutations";
 
@@ -8,8 +9,9 @@ export const dynamic = "force-dynamic";
 
 export async function PATCH(request: Request) {
   try {
+    const user = await requireApiUser();
     const body = await readJson(request);
-    updateUser(body.name);
+    updateUser(user.id, body.name);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return routeError(error);

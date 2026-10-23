@@ -11,6 +11,7 @@ import {
   BookMarked,
   Focus,
   History,
+  ImagePlus,
   PanelLeft,
   PanelRight,
   Smartphone,
@@ -26,7 +27,7 @@ import {
   EDITOR_FONT_KEY,
   EDITOR_SIZE_KEY,
 } from "@/lib/constants";
-import { countParagraphs, countWords, readingMinutes } from "@/lib/words";
+import { countParagraphs, countWords, paragraphList, readingMinutes } from "@/lib/words";
 import { apiFetch } from "@/lib/api-client";
 import { cn, formatDateTime, formatNumber, initialOf } from "@/lib/utils";
 import { capsule } from "@/components/ui/button";
@@ -34,6 +35,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useToast } from "@/components/ui/toast";
 import { ChapterOutline } from "./chapter-outline";
+import { ChapterIllustrations } from "./chapter-illustrations";
 import { EditorSidePanel, type EditorFont } from "./editor-side-panel";
 import { StoryBiblePanel } from "./story-bible";
 import { SaveStatus } from "./save-status";
@@ -61,6 +63,7 @@ export function EditorWorkspace({
   const [panelMode, setPanelMode] = useState<"assist" | "bible">("assist");
   const [bibleOpen, setBibleOpen] = useState(false);
   const [storyEntities, setStoryEntities] = useState(initial.storyEntities);
+  const [illustrations, setIllustrations] = useState(initial.illustrations);
   const [addingIn, setAddingIn] = useState<string | null>(null);
   const [remoteConfirm, setRemoteConfirm] = useState(false);
 
@@ -238,6 +241,19 @@ export function EditorWorkspace({
     } catch {
       // Ignore storage failures; the selection still applies this session.
     }
+  };
+
+  const getCaretParagraph = useCallback(() => {
+    const total = paragraphList(content).length;
+    const node = textareaRef.current;
+    const caret = node ? node.selectionStart : content.length;
+    return Math.min(total, paragraphList(content.slice(0, caret)).length);
+  }, [content]);
+
+  const openIllustrations = () => {
+    document
+      .getElementById("chapter-illustrations")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const openStoryBible = () => {
@@ -421,7 +437,7 @@ export function EditorWorkspace({
               aria-label="打开设置"
             >
               <span
-                className="flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold text-on-accent"
+                className="flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold text-on-cover"
                 style={{ backgroundColor: initial.user.avatarColor }}
               >
                 {initialOf(initial.user.name)}
@@ -518,9 +534,21 @@ export function EditorWorkspace({
               <div className="flex flex-wrap items-center gap-2">
                 <span className={statusChipClass}>{CHAPTER_STATUS_LABEL[status]}</span>
                 <span className="text-[10px] text-ink-mute">{volume?.title ?? "未分卷"}</span>
-                <span className="ml-auto text-[10px] tabular-nums text-ink-mute">
-                  第 {chapterNumber} / {totalChapters} 章
-                </span>
+                <div className="ml-auto flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={openIllustrations}
+                    className={capsule("ghost", "sm", "h-7 px-2 text-[10px]")}
+                    aria-label="查看本章插画"
+                    title="查看本章插画"
+                  >
+                    <ImagePlus size={12} />
+                    插画{illustrations.length > 0 ? ` ${illustrations.length}` : ""}
+                  </button>
+                  <span className="text-[10px] tabular-nums text-ink-mute">
+                    第 {chapterNumber} / {totalChapters} 章
+                  </span>
+                </div>
               </div>
 
               <input
@@ -572,6 +600,14 @@ export function EditorWorkspace({
                 <span className="hidden sm:inline">Ctrl / Cmd + S 手动保存</span>
               </div>
             </article>
+
+            <ChapterIllustrations
+              chapterId={chapter.id}
+              content={content}
+              illustrations={illustrations}
+              onIllustrationsChange={setIllustrations}
+              getCaretParagraph={getCaretParagraph}
+            />
 
             <p className="mt-3 px-2 text-center text-[10px] leading-5 text-ink-mute">
               自动保存已开启 · 服务端与浏览器各保留一份

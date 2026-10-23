@@ -12,8 +12,20 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   handle TEXT NOT NULL UNIQUE,
   avatar_color TEXT NOT NULL,
+  password_hash TEXT NOT NULL DEFAULT '',
+  password_salt TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS works (
   id TEXT PRIMARY KEY,
@@ -94,6 +106,22 @@ CREATE TABLE IF NOT EXISTS story_entities (
 CREATE INDEX IF NOT EXISTS idx_story_entities_work
   ON story_entities(work_id, type, sort);
 
+CREATE TABLE IF NOT EXISTS chapter_illustrations (
+  id TEXT PRIMARY KEY,
+  chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+  paragraph INTEGER NOT NULL DEFAULT 0,
+  caption TEXT NOT NULL DEFAULT '',
+  image_mime TEXT NOT NULL CHECK (image_mime IN ('jpeg', 'png', 'webp')),
+  image_data BLOB NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chapter_illustrations_chapter
+  ON chapter_illustrations(chapter_id, paragraph, created_at);
+
 CREATE TABLE IF NOT EXISTS revisions (
   id TEXT PRIMARY KEY,
   chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
@@ -138,16 +166,34 @@ function openDatabase(): DatabaseSync {
 }
 
 function migrateDatabase(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(works)").all() as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === "cover_image")) {
+  const workColumns = db.prepare("PRAGMA table_info(works)").all() as Array<{ name: string }>;
+  if (!workColumns.some((column) => column.name === "cover_image")) {
     db.exec("ALTER TABLE works ADD COLUMN cover_image TEXT;");
   }
+
+  const userColumns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+  if (!userColumns.some((column) => column.name === "password_hash")) {
+    db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';");
+  }
+  if (!userColumns.some((column) => column.name === "password_salt")) {
+    db.exec("ALTER TABLE users ADD COLUMN password_salt TEXT NOT NULL DEFAULT '';");
+  }
+
+  db.exec(`
+    INSERT INTO work_members (id, work_id, user_id, role, created_at)
+    SELECT lower(hex(randomblob(16))), w.id, w.author_id, 'owner', w.created_at
+    FROM works w
+    WHERE NOT EXISTS (
+      SELECT 1 FROM work_members m
+      WHERE m.work_id = w.id AND m.user_id = w.author_id
+    );
+  `);
 
   const version = db.prepare("PRAGMA user_version").get() as
     | { user_version: number }
     | undefined;
-  if (!version || version.user_version < 2) {
-    db.exec("PRAGMA user_version = 2;");
+  if (!version || version.user_version < 4) {
+    db.exec("PRAGMA user_version = 4;");
   }
 }
 
@@ -435,19 +481,14 @@ function seedDatabase(db: DatabaseSync): void {
   const now = new Date();
   const nowIso = now.toISOString();
 
-  const userExists = db
-    .prepare("SELECT id FROM users WHERE id = ?")
-    .get(LOCAL_USER_ID);
-  if (!userExists) {
-    db.prepare(
-      "INSERT INTO users (id, name, handle, avatar_color, created_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(LOCAL_USER_ID, "沈砚", "local", "#26594A", minutesAgo(60 * 24 * 120));
-  }
-
-  const workCount = db.prepare("SELECT COUNT(*) AS n FROM works").get() as {
+  const userCount = db.prepare("SELECT COUNT(*) AS n FROM users").get() as {
     n: number;
   };
-  if (workCount.n > 0) return;
+  if (userCount.n > 0) return;
+
+  db.prepare(
+    "INSERT INTO users (id, name, handle, avatar_color, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run(LOCAL_USER_ID, "沈砚", "local", "#26594A", minutesAgo(60 * 24 * 120));
 
   const workOneId = crypto.randomUUID();
   const workOneVolumeOne = crypto.randomUUID();

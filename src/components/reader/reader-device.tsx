@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   BatteryFull,
   ChevronLeft,
@@ -13,7 +13,7 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import type { ReaderChapter, ReaderWork } from "@/lib/types";
+import type { ChapterIllustration, ReaderChapter, ReaderWork } from "@/lib/types";
 import {
   FONT_STACKS,
   MARGIN_PIXELS,
@@ -50,6 +50,16 @@ export function ReaderDevice({
   const theme = READER_THEMES[prefs.theme];
   const margin = MARGIN_PIXELS[prefs.margin];
   const paragraphs = paragraphList(chapter.content);
+  const illustrationsByParagraph = new Map<number, ChapterIllustration[]>();
+  for (const illustration of chapter.illustrations) {
+    const anchor = Math.min(
+      Math.max(illustration.paragraph, 0),
+      paragraphs.length,
+    );
+    const list = illustrationsByParagraph.get(anchor) ?? [];
+    list.push(illustration);
+    illustrationsByParagraph.set(anchor, list);
+  }
 
   const [page, setPage] = useState(0);
   const [pageCount, setPageCount] = useState(1);
@@ -129,7 +139,9 @@ export function ReaderDevice({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [
+    chapter.id,
     chapter.content,
+    chapter.illustrations,
     contentHeight,
     prefs.fontSize,
     prefs.lineHeight,
@@ -138,6 +150,10 @@ export function ReaderDevice({
     platform.id,
     measureTick,
   ]);
+
+  const handleIllustrationLoad = useCallback(() => {
+    setMeasureTick((value) => value + 1);
+  }, []);
 
   const goNextPage = useCallback(() => {
     if (page < pageCount - 1) {
@@ -307,19 +323,40 @@ export function ReaderDevice({
           >
             {chapter.title}
           </h1>
+          {(illustrationsByParagraph.get(0) ?? []).map((illustration) => (
+            <InlineIllustration
+              key={illustration.id}
+              illustration={illustration}
+              theme={theme}
+              maxHeight={Math.round(contentHeight * 0.6)}
+              onLoad={handleIllustrationLoad}
+            />
+          ))}
           {paragraphs.length > 0 ? (
             paragraphs.map((paragraph, paragraphIndex) => (
-              <p
-                key={paragraphIndex}
-                style={{
-                  textIndent: "2em",
-                  textAlign: "justify",
-                  margin: "0 0 0.8em",
-                  overflowWrap: "break-word",
-                }}
-              >
-                {paragraph}
-              </p>
+              <Fragment key={paragraphIndex}>
+                <p
+                  style={{
+                    textIndent: "2em",
+                    textAlign: "justify",
+                    margin: "0 0 0.8em",
+                    overflowWrap: "break-word",
+                  }}
+                >
+                  {paragraph}
+                </p>
+                {(illustrationsByParagraph.get(paragraphIndex + 1) ?? []).map(
+                  (illustration) => (
+                    <InlineIllustration
+                      key={illustration.id}
+                      illustration={illustration}
+                      theme={theme}
+                      maxHeight={Math.round(contentHeight * 0.6)}
+                      onLoad={handleIllustrationLoad}
+                    />
+                  ),
+                )}
+              </Fragment>
             ))
           ) : (
             <p style={{ color: theme.muted, textAlign: "center" }}>
@@ -434,6 +471,61 @@ export function ReaderDevice({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function InlineIllustration({
+  illustration,
+  theme,
+  maxHeight,
+  onLoad,
+}: {
+  illustration: ChapterIllustration;
+  theme: ReaderTheme;
+  maxHeight: number;
+  onLoad: () => void;
+}) {
+  return (
+    <figure
+      style={{
+        margin: "0.2em 0 1em",
+        breakInside: "avoid",
+        pageBreakInside: "avoid",
+      }}
+    >
+      <img
+        src={illustration.imageUrl}
+        alt={illustration.caption || "章节插画"}
+        width={illustration.width}
+        height={illustration.height}
+        loading="eager"
+        decoding="async"
+        onLoad={onLoad}
+        onError={onLoad}
+        style={{
+          display: "block",
+          width: "100%",
+          height: "auto",
+          maxHeight,
+          objectFit: "contain",
+          borderRadius: "14px",
+          backgroundColor: theme.soft,
+        }}
+      />
+      {illustration.caption ? (
+        <figcaption
+          style={{
+            marginTop: "0.45em",
+            textAlign: "center",
+            fontSize: "0.7em",
+            lineHeight: 1.6,
+            color: theme.muted,
+          }}
+        >
+          {illustration.caption}
+        </figcaption>
+      ) : null}
+    </figure>
   );
 }
 

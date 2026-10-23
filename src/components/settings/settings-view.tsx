@@ -9,6 +9,7 @@ import {
   Database,
   Info,
   Loader2,
+  LockKeyhole,
   Monitor,
   Moon,
   Palette,
@@ -63,6 +64,10 @@ export function SettingsView({
   const [theme, setTheme] = useState<ThemePreference>("system");
   const [name, setName] = useState(user.name);
   const [savingName, setSavingName] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
   const [goal, setGoal] = useState(String(DEFAULT_DAILY_GOAL));
   const [savedGoal, setSavedGoal] = useState(DEFAULT_DAILY_GOAL);
   const [editorFont, setEditorFont] = useState<EditorFont>("serif");
@@ -120,6 +125,43 @@ export function SettingsView({
     }
   };
 
+  const updatePassword = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (savingPassword) return;
+    if (!currentPassword) {
+      toast("请输入当前密码", "danger");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast("新密码至少需要 8 位", "danger");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast("两次输入的新密码不一致", "danger");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      toast("新密码不能与当前密码相同", "danger");
+      return;
+    }
+
+    setSavingPassword(true);
+    try {
+      await apiFetch("/api/auth/password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      toast("密码已更新，其他会话已退出");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "修改密码失败", "danger");
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
   const saveGoal = (value = goalNumber) => {
     if (!Number.isInteger(value) || value < 100 || value > 100_000) {
       toast("每日目标需在 100 到 100000 字之间", "danger");
@@ -156,10 +198,10 @@ export function SettingsView({
             工作台设置
           </h1>
           <p className="mt-2 max-w-xl text-[12px] leading-6 text-ink-soft sm:text-[13px]">
-            外观、笔名与写作偏好。设置只保存在这台设备，不会上传。
+            账号、外观与写作偏好。账号与作品保存在本机 SQLite，浏览器偏好不会上传。
           </p>
         </div>
-        <span className="chip">M1 单人写作</span>
+        <span className="chip">多账号与协作</span>
       </div>
 
       <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_330px]">
@@ -220,7 +262,7 @@ export function SettingsView({
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <span
-                  className="flex h-11 w-11 flex-none items-center justify-center rounded-full text-sm font-semibold text-on-accent"
+                  className="flex h-11 w-11 flex-none items-center justify-center rounded-full text-sm font-semibold text-on-cover"
                   style={{ backgroundColor: user.avatarColor }}
                   aria-hidden="true"
                 >
@@ -247,9 +289,78 @@ export function SettingsView({
               <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-ink-mute">
                 <span>账号 {user.handle}</span>
                 <span className="h-1 w-1 rounded-full bg-line-strong" aria-hidden="true" />
-                <span>本机工作区，暂无云端账号</span>
+                <span>本机账号，密码经加盐哈希保存</span>
               </p>
             </div>
+          </section>
+
+          <section className="card p-5 sm:p-6" aria-labelledby="security-title">
+            <SectionHeader
+              icon={LockKeyhole}
+              title="账号安全"
+              description="修改密码后，其他浏览器需要重新登录。"
+              id="security-title"
+            />
+            <form className="mt-5 grid gap-4 sm:grid-cols-3" onSubmit={updatePassword}>
+              <div>
+                <label htmlFor="current-password" className="field-label">
+                  当前密码
+                </label>
+                <input
+                  id="current-password"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  autoComplete="current-password"
+                  maxLength={128}
+                  className="field-input"
+                />
+              </div>
+              <div>
+                <label htmlFor="new-password" className="field-label">
+                  新密码
+                </label>
+                <input
+                  id="new-password"
+                  type="password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  autoComplete="new-password"
+                  minLength={8}
+                  maxLength={128}
+                  placeholder="至少 8 位"
+                  className="field-input"
+                />
+              </div>
+              <div>
+                <label htmlFor="confirm-password" className="field-label">
+                  确认新密码
+                </label>
+                <input
+                  id="confirm-password"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  autoComplete="new-password"
+                  maxLength={128}
+                  placeholder="再输入一次"
+                  className="field-input"
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 sm:col-span-3">
+                <p className="text-[10px] leading-5 text-ink-mute">
+                  账号 {user.handle} · 密码只以加盐哈希保存在本机。
+                </p>
+                <button
+                  type="submit"
+                  disabled={savingPassword}
+                  className={capsule("primary", "md", "flex-none")}
+                >
+                  {savingPassword ? <Loader2 size={14} className="animate-spin-slow" /> : null}
+                  更新密码
+                </button>
+              </div>
+            </form>
           </section>
 
           <section className="card p-5 sm:p-6" aria-labelledby="writing-title">
@@ -427,7 +538,8 @@ export function SettingsView({
             <ul className="mt-3 space-y-2 text-[10px] leading-5 text-ink-mute">
               <li>可用环境变量 INK_DB_PATH 指向其他位置。</li>
               <li>备份前请先停止开发服务器，再复制数据库文件。</li>
-              <li>单部作品可在作品页导出 TXT 或 Markdown。</li>
+              <li>整书 JSON 在作品页导出，可在书架导入为新的作品。</li>
+              <li>纯文本 TXT 与 Markdown 导出不包含设定与插画。</li>
             </ul>
           </section>
 
@@ -445,7 +557,7 @@ export function SettingsView({
               </div>
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-ink-mute">版本</dt>
-                <dd className="font-mono text-[10px] text-ink-soft">0.1.0 · M1</dd>
+                <dd className="font-mono text-[10px] text-ink-soft">0.2.0 · 多账号</dd>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-ink-mute">数据</dt>
@@ -453,7 +565,7 @@ export function SettingsView({
               </div>
             </dl>
             <p className="mt-4 border-t border-line pt-3 text-[10px] leading-5 text-ink-mute">
-              协作、故事圣经与实时编辑属于后续里程碑。当前版本专注把单人写作做稳。
+              评论与实时协作属于后续里程碑。当前版本提供本机账号、作品成员角色与整书迁移。
             </p>
           </section>
         </aside>

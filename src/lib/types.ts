@@ -2,6 +2,7 @@
 
 export type WorkStatus = "serializing" | "completed" | "paused";
 export type ChapterStatus = "draft" | "ready" | "published";
+export type WorkRole = "owner" | "editor" | "commenter" | "reader";
 export type StoryEntityType =
   | "character"
   | "organization"
@@ -15,6 +16,12 @@ export interface User {
   handle: string;
   avatarColor: string;
   createdAt: string;
+}
+
+export interface WorkMember {
+  user: User;
+  role: WorkRole;
+  joinedAt: string;
 }
 
 export interface ChapterMeta {
@@ -65,11 +72,13 @@ export interface WorkSummary {
   lastChapterId: string | null;
   lastChapterTitle: string | null;
   lastChapterVolumeId: string | null;
+  role: WorkRole;
 }
 
 export interface WorkDetail extends WorkSummary {
   author: User;
   volumes: VolumeWithChapters[];
+  members: WorkMember[];
 }
 
 export interface EditorWork {
@@ -100,6 +109,18 @@ export interface StoryEntity {
   updatedAt: string;
 }
 
+export interface ChapterIllustration {
+  id: string;
+  chapterId: string;
+  paragraph: number;
+  caption: string;
+  width: number;
+  height: number;
+  imageUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface EditorBundle {
   user: User;
   work: EditorWork;
@@ -108,6 +129,7 @@ export interface EditorBundle {
   chapter: ChapterFull;
   dailyWords: number;
   storyEntities: StoryEntity[];
+  illustrations: ChapterIllustration[];
 }
 
 export interface LibraryStats {
@@ -143,6 +165,7 @@ export interface ReaderChapter {
   wordCount: number;
   sort: number;
   volumeTitle: string;
+  illustrations: ChapterIllustration[];
 }
 
 export interface ReaderWork {
@@ -172,4 +195,54 @@ export interface SaveChapterResult {
     wordCount: number;
   };
   revisionCreated: boolean;
+}
+
+export interface WorkArchiveIllustration {
+  paragraph: number;
+  caption: string;
+  mime: "jpeg" | "png" | "webp";
+  width: number;
+  height: number;
+  data: string;
+}
+
+export interface WorkArchiveChapter {
+  title: string;
+  status: ChapterStatus;
+  content: string;
+  illustrations: WorkArchiveIllustration[];
+}
+
+export interface WorkArchiveVolume {
+  title: string;
+  summary: string;
+  chapters: WorkArchiveChapter[];
+}
+
+export interface WorkArchiveStoryEntity {
+  type: StoryEntityType;
+  name: string;
+  subtitle: string;
+  summary: string;
+  description: string;
+  color: string;
+}
+
+export interface WorkArchive {
+  app: "inkdock";
+  version: 1;
+  exportedAt: string;
+  work: {
+    title: string;
+    subtitle: string;
+    description: string;
+    genre: string;
+    status: WorkStatus;
+    coverColor: string;
+    coverImage: string | null;
+    targetWords: number;
+    authorName: string;
+  };
+  storyEntities: WorkArchiveStoryEntity[];
+  volumes: WorkArchiveVolume[];
 }

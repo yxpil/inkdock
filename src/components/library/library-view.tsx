@@ -2,25 +2,30 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   BookOpen,
   Feather,
+  Loader2,
   PenLine,
   Plus,
   Search,
+  Upload,
   X,
 } from "lucide-react";
 import type { LibraryData, WorkStatus } from "@/lib/types";
 import { BookCover } from "@/components/book-cover";
 import { CreateWorkDialog } from "@/components/library/create-work-dialog";
 import { capsule } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/api-client";
 import {
   DAILY_GOAL_KEY,
   DEFAULT_DAILY_GOAL,
+  WORK_ROLE_LABEL,
   WORK_STATUS_LABEL,
 } from "@/lib/constants";
 import { useStoredNumber } from "@/hooks/use-stored-number";
@@ -49,9 +54,12 @@ export function LibraryView({
   openNewInitially: boolean;
 }) {
   const router = useRouter();
+  const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(openNewInitially);
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [query, setQuery] = useState("");
+  const [importing, setImporting] = useState(false);
+  const importInput = useRef<HTMLInputElement>(null);
   const goal = useStoredNumber(DAILY_GOAL_KEY, DEFAULT_DAILY_GOAL);
 
   useEffect(() => {
@@ -79,6 +87,48 @@ export function LibraryView({
 
   const goalProgress = Math.min(100, Math.round((data.stats.todayWords / goal) * 100));
   const hasFilter = filter !== "all" || query.trim() !== "";
+  const recentWork = data.recent
+    ? data.works.find((item) => item.id === data.recent?.workId)
+    : undefined;
+  const recentCanEdit =
+    recentWork?.role === "owner" || recentWork?.role === "editor";
+
+  const importArchive = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || importing) return;
+
+    setImporting(true);
+    try {
+      const text = await file.text();
+      if (text.length > 120_000_000) {
+        throw new Error("备份文件超过 120 MB 上限，请拆分后再导入。");
+      }
+      let title = "未命名作品";
+      try {
+        const parsed = JSON.parse(text) as { work?: { title?: unknown } };
+        if (typeof parsed.work?.title === "string" && parsed.work.title.trim()) {
+          title = parsed.work.title.trim();
+        }
+      } catch {
+        throw new Error("这不是有效的 JSON 文件。");
+      }
+
+      const result = await apiFetch<{
+        workId: string;
+        chapterCount: number;
+        illustrationCount: number;
+      }>("/api/works/import", { method: "POST", body: text });
+      toast(
+        `已导入《${title}》：${result.chapterCount} 章、${result.illustrationCount} 幅插画`,
+      );
+      router.push(`/works/${result.workId}`);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "导入失败", "danger");
+    } finally {
+      setImporting(false);
+    }
+  };
 
   return (
     <div className="space-y-7">
@@ -94,14 +144,37 @@ export function LibraryView({
             把故事放回纸上。今天继续哪一章？
           </p>
         </div>
-        <button
-          type="button"
-          className={capsule("primary", "lg", "self-start sm:self-auto")}
-          onClick={() => setCreateOpen(true)}
-        >
-          <Plus size={17} strokeWidth={2} />
-          新建作品
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <input
+            ref={importInput}
+            type="file"
+            accept=".json,application/json"
+            className="sr-only"
+            onChange={importArchive}
+            aria-label="选择整书备份文件"
+          />
+          <button
+            type="button"
+            className={capsule("outline", "lg")}
+            onClick={() => importInput.current?.click()}
+            disabled={importing}
+          >
+            {importing ? (
+              <Loader2 size={16} className="animate-spin-slow" />
+            ) : (
+              <Upload size={16} />
+            )}
+            {importing ? "正在导入" : "导入整书"}
+          </button>
+          <button
+            type="button"
+            className={capsule("primary", "lg")}
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus size={17} strokeWidth={2} />
+            新建作品
+          </button>
+        </div>
       </header>
 
       <section
@@ -157,7 +230,7 @@ export function LibraryView({
             <div className="min-w-0 max-w-2xl">
               <p className="flex items-center gap-2 text-[11px] font-medium tracking-[0.12em] text-on-accent/70">
                 <PenLine size={14} strokeWidth={1.75} />
-                继续写作 · {data.recent.workTitle}
+                {recentCanEdit ? "继续写作" : "继续阅读"} · {data.recent.workTitle}
               </p>
               <h2 className="mt-3 font-serif text-2xl font-semibold leading-snug sm:text-[28px]">
                 {data.recent.chapterTitle}
@@ -172,10 +245,14 @@ export function LibraryView({
               </p>
             </div>
             <Link
-              href={`/write/${data.recent.chapterId}`}
+              href={
+                recentCanEdit
+                  ? `/write/${data.recent.chapterId}`
+                  : `/preview/${data.recent.workId}?chapter=${data.recent.chapterId}`
+              }
               className="capsule h-12 shrink-0 bg-on-accent px-6 text-sm text-accent hover:opacity-90"
             >
-              继续写作
+              {recentCanEdit ? "继续写作" : "继续阅读"}
               <ArrowRight size={16} />
             </Link>
           </div>
@@ -238,14 +315,32 @@ export function LibraryView({
             <p className="mt-2 max-w-sm text-[13px] leading-6 text-ink-soft">
               先为它起一个名字。第一卷和第一章会自动准备好。
             </p>
-            <button
-              type="button"
-              className={capsule("primary", "lg", "mt-6")}
-              onClick={() => setCreateOpen(true)}
-            >
-              <Plus size={16} />
-              新建第一本作品
-            </button>
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                className={capsule("primary", "lg")}
+                onClick={() => setCreateOpen(true)}
+              >
+                <Plus size={16} />
+                新建第一本作品
+              </button>
+              <button
+                type="button"
+                className={capsule("outline", "lg")}
+                onClick={() => importInput.current?.click()}
+                disabled={importing}
+              >
+                {importing ? (
+                  <Loader2 size={16} className="animate-spin-slow" />
+                ) : (
+                  <Upload size={16} />
+                )}
+                导入整书备份
+              </button>
+            </div>
+            <p className="mt-4 max-w-sm text-[10px] leading-5 text-ink-mute">
+              如果你是被邀请的读者，作品所有者按账号添加后，共享作品会出现在这里。
+            </p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="card flex flex-col items-center px-6 py-16 text-center">
@@ -295,6 +390,12 @@ export function LibraryView({
                         aria-hidden="true"
                       />
                       {WORK_STATUS_LABEL[work.status]} · {work.genre}
+                      {work.role !== "owner" ? (
+                        <span className="text-accent">
+                          {" "}
+                          · 协作 · {WORK_ROLE_LABEL[work.role]}
+                        </span>
+                      ) : null}
                     </p>
                     <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-ink-mute">
                       <span>{formatWords(work.totalWords)} 字</span>

@@ -1,6 +1,7 @@
 // Author: yxpil
 
 import { NextResponse } from "next/server";
+import { requireApiUser } from "@/lib/auth";
 import { readJson, routeError } from "@/lib/http";
 import { updateChapter } from "@/lib/mutations";
 
@@ -15,13 +16,18 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await requireApiUser();
     const { id } = await params;
     const body = await readJson(request);
-    const result = updateChapter(id, {
-      title: body.title,
-      content: body.content,
-      status: body.status,
-    });
+    const result = updateChapter(
+      id,
+      {
+        title: body.title,
+        content: body.content,
+        status: body.status,
+      },
+      user.id,
+    );
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     return routeError(error);

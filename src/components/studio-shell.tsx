@@ -2,12 +2,15 @@
 
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Database, Library, Plus, Settings } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Database, Library, Loader2, LogOut, Plus, Settings } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { BrandLockup, BrandMark } from "@/components/brand";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { useToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/api-client";
 import { cn, initialOf } from "@/lib/utils";
 import type { User } from "@/lib/types";
 
@@ -35,7 +38,23 @@ export function StudioShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { toast } = useToast();
+  const [loggingOut, setLoggingOut] = useState(false);
   const crumb = breadcrumbFor(pathname);
+
+  const logout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+      router.replace("/login");
+      router.refresh();
+    } catch (error) {
+      setLoggingOut(false);
+      toast(error instanceof Error ? error.message : "退出登录失败", "danger");
+    }
+  };
 
   return (
     <div className="min-h-dvh">
@@ -96,7 +115,7 @@ export function StudioShell({
           <div className="flex items-center gap-1.5">
             <span className="mr-1 hidden items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11px] text-ink-mute md:flex">
               <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
-              本机工作区
+              本机账号
             </span>
             <ThemeToggle />
             <Link
@@ -105,13 +124,27 @@ export function StudioShell({
               aria-label="打开设置"
             >
               <span
-                className="flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-semibold text-on-accent"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-[13px] font-semibold text-on-cover"
                 style={{ backgroundColor: user.avatarColor }}
               >
                 {initialOf(user.name)}
               </span>
               <span className="hidden max-w-24 truncate sm:inline">{user.name}</span>
             </Link>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              disabled={loggingOut}
+              className="icon-capsule h-9 w-9"
+              aria-label="退出登录"
+              title="退出登录"
+            >
+              {loggingOut ? (
+                <Loader2 size={15} className="animate-spin-slow" />
+              ) : (
+                <LogOut size={15} />
+              )}
+            </button>
           </div>
         </header>
 
